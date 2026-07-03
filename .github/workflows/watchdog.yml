@@ -1,11 +1,10 @@
-name: portfolio-watchdog
-# Checks that the portfolio dashboard (josh-max2.github.io/portfolio) is updating.
-# The page's build timestamp (TS=...) is in the unencrypted shell, so no secrets
-# are needed. If stale, opens a GitHub issue -> GitHub emails the owner. Closes
-# the issue automatically on recovery.
+name: watchdog
+# Guards BOTH live systems via GitHub issues (GitHub emails the owner; no secrets):
+#  1) Kalshi live trading bot  — data at josh-max2.github.io/tradetest/data/paper.json
+#  2) Portfolio dashboard      — build timestamp in josh-max2.github.io/portfolio
 on:
   schedule:
-    - cron: "17 14-21/2 * * 1-5"   # every 2h during US market hours
+    - cron: "*/30 * * * *"     # every 30 min (Kalshi trades round-the-clock weekdays)
   workflow_dispatch: {}
 permissions:
   issues: write
@@ -15,7 +14,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check dashboard freshness
+      - name: Kalshi bot freshness (threshold 45 min)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          NOW=$(date +%s)
+          EPOCH=$(curl -sf "https://josh-max2.github.io/tradetest/data/paper.json?cb=$NOW" \
+            | python3 -c "import sys,json;print(json.load(sys.stdin).get('generated_epoch',0))" || echo 0)
+          AGE=$(( (NOW - EPOCH) / 60 ))
+          echo "kalshi data age: ${AGE} min"
+          gh label create bot-down --color B60205 2>/dev/null || true
+          OPEN=$(gh issue list --state open --label bot-down --json number --jq 'length')
+          if [ "$AGE" -gt 45 ]; then
+            [ "$OPEN" = "0" ] && gh issue create --label bot-down \
+              --title "🔴 Kalshi live bot SILENT for ${AGE} min" \
+              --body "https://josh-max2.github.io/tradetest/ hasn't updated in **${AGE} minutes** (threshold 45). The bot or the PC is likely down. Orders on Kalshi are GTC and fail-safe, but no new placements are happening. Check the PC / task KalshiLiveTrader."
+          else
+            if [ "$OPEN" != "0" ]; then
+              N=$(gh issue list --state open --label bot-down --json number --jq '.[0].number')
+              gh issue close "$N" -c "Recovered — data is ${AGE} min old."
+            fi
+          fi
+      - name: Portfolio dashboard freshness (market hours)
+        if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -24,27 +46,20 @@ jobs:
           TS=$(curl -sf "https://josh-max2.github.io/portfolio/?cb=$NOW" \
                | grep -oE 'TS=[0-9]+' | head -1 | cut -d= -f2 || echo 0)
           AGE=$(( (NOW - TS) / 60 ))
-          echo "dashboard build age: ${AGE} min"
-          # market hours (13:30-22:00 UTC, Mon-Fri): expect a build every ~30 min.
+          echo "portfolio dashboard age: ${AGE} min"
           DOW=$(date -u +%u); HR=$(date -u +%H)
-          THRESH=4320   # 3 days when market closed (weekend/overnight is normal)
+          THRESH=4320
           if [ "$DOW" -le 5 ] && [ "$HR" -ge 14 ] && [ "$HR" -lt 22 ]; then THRESH=120; fi
-          OPEN=$(gh issue list -R ${{ github.repository }} --state open \
-                 --label monitor-down --json number --jq 'length')
+          gh label create monitor-down --color B60205 2>/dev/null || true
+          OPEN=$(gh issue list --state open --label monitor-down --json number --jq 'length')
           if [ "$TS" = "0" ] || [ "$AGE" -gt "$THRESH" ]; then
-            if [ "$OPEN" = "0" ]; then
-              gh label create monitor-down -R ${{ github.repository }} \
-                --color B60205 2>/dev/null || true
-              gh issue create -R ${{ github.repository }} --label monitor-down \
-                --title "🔴 Portfolio dashboard STALE (${AGE} min old)" \
-                --body "https://josh-max2.github.io/portfolio/ has not rebuilt in **${AGE} minutes** (threshold ${THRESH}). Likely causes: the portfolio repo's scheduled workflow was auto-disabled (60-day rule — press *Run workflow* or push a commit), a workflow failure (check the Actions tab of josh-max2/portfolio), or Plaid/Yahoo outage. This issue closes itself when builds resume."
-            fi
+            [ "$OPEN" = "0" ] && gh issue create --label monitor-down \
+              --title "🔴 Portfolio dashboard STALE (${AGE} min old)" \
+              --body "https://josh-max2.github.io/portfolio/ has not rebuilt in **${AGE} minutes** (threshold ${THRESH}). Likely: the portfolio repo's cron was auto-disabled (60-day rule — press *Run workflow* or push a commit), a workflow failure (Actions tab of josh-max2/portfolio), or a Plaid/Yahoo outage. Closes itself when builds resume."
           else
             if [ "$OPEN" != "0" ]; then
-              N=$(gh issue list -R ${{ github.repository }} --state open \
-                  --label monitor-down --json number --jq '.[0].number')
-              gh issue close -R ${{ github.repository }} "$N" \
-                -c "Recovered — dashboard is ${AGE} min old."
+              N=$(gh issue list --state open --label monitor-down --json number --jq '.[0].number')
+              gh issue close "$N" -c "Recovered — dashboard is ${AGE} min old."
             fi
           fi
       - name: Monthly keepalive (prevents 60-day cron auto-disable)
