@@ -31,7 +31,7 @@ jobs:
             if [ "$OPEN" = "0" ]; then
               gh issue create -R josh-max2/kalshi-watchdog --label bot-down \
                 --title "🔴 Trading feed(s) SILENT: ${STALE}" \
-                --body "Stale feeds (threshold 45 min): **${STALE}** at https://josh-max2.github.io/tradetest/ . The corresponding bot or the PC is likely down. Orders on Kalshi are GTC (rungv2's carry 30-min self-expiry) and fail-safe, but no new placements are happening. Check the PC / tasks KalshiLiveTrader, KalshiMirror, KalshiRungV2."
+                --body "Stale feeds (threshold 45 min): **${STALE}** at https://josh-max2.github.io/tradetest/ . The corresponding bot or the PC is likely down. All resting orders are GTC and fail-safe (Kalshi silently drops expiration_ts — verified 2026-07-09, no order self-expires); local 5-15 min resurrection triggers relaunch dead bots, so a stale feed here means the whole PC is likely down. No new placements are happening; rungv2's resting asks stay live unmanaged until the PC returns. Check the PC / tasks KalshiLiveTrader, KalshiMirror, KalshiRungV2."
             fi
           else
             if [ "$OPEN" != "0" ]; then
